@@ -1,5 +1,7 @@
 # Alpamayo ROS 2 Node Usage Guide
 
+![Alpamayo Autoware Demo](images/alpamayo-autoware.gif)
+
 This guide explains how to set up and run the Alpamayo ROS 2 node.
 
 ## Prerequisites
