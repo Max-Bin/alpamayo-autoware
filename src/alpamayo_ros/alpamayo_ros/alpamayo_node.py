@@ -28,8 +28,8 @@ from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
 
-from alpamayo_r1 import helper
-from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo1_5 import helper
+from alpamayo1_5.models.alpamayo1_5 import Alpamayo1_5
 
 
 class AlpamayoRosNode(Node):
@@ -38,7 +38,7 @@ class AlpamayoRosNode(Node):
     def __init__(self) -> None:
         super().__init__("alpamayo_node")
 
-        self.model_name: str = "nvidia/Alpamayo-R1-10B"
+        self.model_name: str = "nvidia/Alpamayo-1.5-10B"
         self.declare_parameter("trajectory_topic", "/alpamayo/predicted_trajectory")
         self.declare_parameter("cot_topic", "/alpamayo/reasoning")
         self.declare_parameter("cot_with_stamped_topic", "/alpamayo/reasoning_stamped")
@@ -119,7 +119,7 @@ class AlpamayoRosNode(Node):
         self.get_logger().info(
             f"Loading Alpamayo model {self.model_name} on device={self._device} dtype={self._dtype}"
         )
-        self._model = AlpamayoR1.from_pretrained(self.model_name, dtype=self._dtype).to(
+        self._model = Alpamayo1_5.from_pretrained(self.model_name, dtype=self._dtype).to(
             self._device
         )
         self._model.eval()

@@ -32,13 +32,13 @@ Remove any existing venv and recreate it with Python 3.10:
 
 ```bash
 # Remove existing venv (if it exists)
-rm -rf ar1_venv
+rm -rf a1_5_venv
 
 # Create new venv with Python 3.10
-uv venv ar1_venv --python python3.10
+uv venv a1_5_venv --python python3.10
 
 # Activate the virtual environment
-source ar1_venv/bin/activate
+source a1_5_venv/bin/activate
 
 # Install dependencies
 uv sync --active
@@ -49,7 +49,7 @@ uv sync --active
 Request access to the Alpamayo model and dataset:
 
 - [Physical AI AV Dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles)
-- [Alpamayo Model Weights](https://huggingface.co/nvidia/Alpamayo-R1-10B)
+- [Alpamayo Model Weights](https://huggingface.co/nvidia/Alpamayo-1.5-10B)
 
 Once access is granted, authenticate using the HuggingFace CLI:
 
@@ -61,7 +61,7 @@ pip install huggingface_hub
 huggingface-cli login
 ```
 
-You can obtain your access token at: https://huggingface.co/settings/tokens
+You can obtain your access token at: <https://huggingface.co/settings/tokens>
 
 ## Running the ROS 2 Node
 
@@ -77,7 +77,7 @@ source /opt/ros/humble/setup.bash
 source ~/workspace/autoware/install/setup.bash
 
 # Activate virtual environment
-source ar1_venv/bin/activate
+source a1_5_venv/bin/activate
 
 # Run the node
 python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']"
@@ -98,7 +98,7 @@ source /opt/ros/humble/setup.bash
 # Source Autoware environment (need to change correct path)
 source ~/workspace/autoware/install/setup.bash
 # Activate virtual environment
-source ar1_venv/bin/activate
+source a1_5_venv/bin/activate
 
 # Build the package
 colcon build --packages-select alpamayo_ros --symlink-install
@@ -121,7 +121,7 @@ If a launch file is available:
 ```bash
 # Source ROS 2 environment and workspace
 source /opt/ros/humble/setup.bash
-source ar1_venv/bin/activate
+source a1_5_venv/bin/activate
 
 # Source Autoware environment (need to change correct path)
 source ~/workspace/autoware/install/setup.bash
@@ -187,6 +187,6 @@ The node publishes the following topics:
 - Inference code: Apache License 2.0
 - Model weights: Non-commercial license
 
-For details, see the [HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-R1-10B).
+For details, see the [HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-1.5-10B).
 
 Alpamayo 1 is a pre-trained reasoning model for research purposes and is not a complete autonomous driving stack. It is not intended for use in production environments.
