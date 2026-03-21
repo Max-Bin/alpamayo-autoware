@@ -50,6 +50,7 @@ class AlpamayoRosNode(Node):
         self.declare_parameter("trajectory_topic", "/alpamayo/predicted_trajectory")
         self.declare_parameter("cot_topic", "/alpamayo/reasoning")
         self.declare_parameter("cot_with_stamped_topic", "/alpamayo/reasoning_stamped")
+        self.declare_parameter("nav_text_topic", "/alpamayo/nav_text")
         self.declare_parameter("odometry_topic", "/localization/kinematic_state")
         self.declare_parameter("route_topic", "/planning/mission_planning/route")
         self.declare_parameter("inference_period_sec", 0.1)
@@ -87,6 +88,10 @@ class AlpamayoRosNode(Node):
         cot_stamped_topic = self.get_parameter("cot_with_stamped_topic").value
         self._cot_stamped_pub = self.create_publisher(StringStamped, cot_stamped_topic, queue_size)
         self.get_logger().info(f"Publishing reasoning traces (stamped) on {cot_stamped_topic}")
+
+        nav_text_topic = self.get_parameter("nav_text_topic").value
+        self._nav_text_pub = self.create_publisher(String, nav_text_topic, queue_size)
+        self.get_logger().info(f"Publishing navigation text on {nav_text_topic}")
 
         marker_topic = traj_topic + "_markers"
         self._marker_pub = self.create_publisher(MarkerArray, marker_topic, queue_size)
@@ -392,6 +397,12 @@ class AlpamayoRosNode(Node):
 
         marker_array = self._trajectory_to_markers(trajectory)
         self._marker_pub.publish(marker_array)
+
+        nav_text = payload.get("nav_text")
+        if nav_text:
+            nav_msg = String()
+            nav_msg.data = nav_text
+            self._nav_text_pub.publish(nav_msg)
 
         cot_text = self._extract_text(extra, "cot")
         if cot_text:
