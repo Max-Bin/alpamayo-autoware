@@ -47,6 +47,10 @@ class AlpamayoRosNode(Node):
 
         # ROS2 Jazzy: Use non-empty default for string array parameters to properly infer type
         self.declare_parameter("camera_topics", [""])
+        # Camera indices matching CAMERA_DISPLAY_NAMES in helper.py:
+        # 0=Front left, 1=Front, 2=Front right, 3=Rear left, 4=Rear, 5=Rear right, 6=Front telephoto
+        # Each index corresponds to the camera topic at the same position in camera_topics.
+        self.declare_parameter("camera_indices", [0])
 
         self._device = torch.device("cuda")
         self._dtype = torch.bfloat16
@@ -87,6 +91,16 @@ class AlpamayoRosNode(Node):
         if not camera_topics:
             raise ValueError("camera_topics parameter must list at least one image topic.")
         self._camera_topics = camera_topics
+
+        camera_indices = list(
+            self.get_parameter("camera_indices").get_parameter_value().integer_array_value
+        )
+        if len(camera_indices) != len(camera_topics):
+            raise ValueError(
+                f"camera_indices length ({len(camera_indices)}) must match "
+                f"camera_topics length ({len(camera_topics)})."
+            )
+        self._camera_indices = torch.tensor(camera_indices, dtype=torch.int64)
         self._camera_buffers: Dict[str, deque] = {
             topic: deque(maxlen=self._num_frames * 3) for topic in self._camera_topics
         }
@@ -195,6 +209,7 @@ class AlpamayoRosNode(Node):
 
         return {
             "image_frames": image_frames,
+            "camera_indices": self._camera_indices,
             "ego_history_xyz": ego_history_xyz,
             "ego_history_rot": ego_history_rot,
         }
@@ -202,7 +217,11 @@ class AlpamayoRosNode(Node):
     def _run_inference(self, payload: dict) -> dict:
         start = time.time()
         frames = payload["image_frames"]
-        messages = helper.create_message(frames.flatten(0, 1))
+        messages = helper.create_message(
+            frames.flatten(0, 1),
+            camera_indices=payload["camera_indices"],
+            num_frames_per_camera=self._num_frames,
+        )
         processor_inputs = self._processor.apply_chat_template(
             messages,
             tokenize=True,

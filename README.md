@@ -80,10 +80,15 @@ source ~/workspace/autoware/install/setup.bash
 source a1_5_venv/bin/activate
 
 # Run the node
-python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']"
+python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args \
+  -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" \
+  -p camera_indices:="[0, 1, 2, 6]"
 
 # Run the node (rosbag mode)
-# python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" -p use_sim_time:=true
+# python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args \
+#   -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" \
+#   -p camera_indices:="[0, 1, 2, 6]" \
+#   -p use_sim_time:=true
 
 ```
 
@@ -107,10 +112,15 @@ colcon build --packages-select alpamayo_ros --symlink-install
 source install/setup.bash
 
 # Run the node
-python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']"
+python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args \
+  -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" \
+  -p camera_indices:="[0, 1, 2, 6]"
 
 # Run the node (rosbag mode)
-# python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" -p use_sim_time:=true
+# python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args \
+#   -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" \
+#   -p camera_indices:="[0, 1, 2, 6]" \
+#   -p use_sim_time:=true
 
 ```
 
@@ -134,15 +144,16 @@ ros2 launch alpamayo_ros alpamayo.launch.py
 
 The Alpamayo node can be configured with the following ROS parameters:
 
-| Parameter                | Default Value                    | Description                                        |
-| ------------------------ | -------------------------------- | -------------------------------------------------- |
-| `camera_topics`          | (required)                       | List of camera image topics (CompressedImage type) |
-| `odometry_topic`         | `/localization/kinematic_state`  | Odometry topic                                     |
-| `trajectory_topic`       | `/alpamayo/predicted_trajectory` | Output topic for predicted trajectory              |
-| `cot_topic`              | `/alpamayo/reasoning`            | Output topic for reasoning trace                   |
-| `cot_with_stamped_topic` | `/alpamayo/reasoning_stamped`    | Output topic for timestamped reasoning trace       |
-| `inference_period_sec`   | `0.1`                            | Inference execution period (seconds)               |
-| `use_sim_time`           | `false`                          | Whether to use simulation time                     |
+| Parameter | Default Value | Description |
+| --- | --- | --- |
+| `camera_topics` | (required) | List of camera image topics (CompressedImage type) |
+| `camera_indices` | (required) | Camera index for each topic (0=Front left, 1=Front, 2=Front right, 3=Rear left, 4=Rear, 5=Rear right, 6=Front telephoto) |
+| `odometry_topic` | `/localization/kinematic_state` | Odometry topic |
+| `trajectory_topic` | `/alpamayo/predicted_trajectory` | Output topic for predicted trajectory |
+| `cot_topic` | `/alpamayo/reasoning` | Output topic for reasoning trace |
+| `cot_with_stamped_topic` | `/alpamayo/reasoning_stamped` | Output topic for timestamped reasoning trace |
+| `inference_period_sec` | `0.1` | Inference execution period (seconds) |
+| `use_sim_time` | `false` | Whether to use simulation time |
 
 ## Troubleshooting
 
