@@ -68,7 +68,7 @@ class AlpamayoRosNode(Node):
         self._dtype = torch.bfloat16
 
         KINEMATIC_STATE_HZ = 50.0
-        ALPAMAYO_INPUT_HZ = 1.0
+        ALPAMAYO_INPUT_HZ = 10.0  # Model expects 10Hz (time_step=0.1s)
         self.skip_num = int(KINEMATIC_STATE_HZ / ALPAMAYO_INPUT_HZ)
 
         self._num_history_steps = 16
@@ -152,10 +152,10 @@ class AlpamayoRosNode(Node):
 
         route_topic = self.get_parameter("route_topic").value
         route_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,
         )
         self.create_subscription(LaneletRoute, route_topic, self._route_callback, route_qos)
         self.get_logger().info(f"Subscribed to route topic: {route_topic}")
@@ -276,7 +276,10 @@ class AlpamayoRosNode(Node):
         payload = self._prepare_inference_payload()
         if payload is None:
             return
-        self.get_logger().info("Starting Alpamayo inference from streaming data.")
+        nav_text = payload.get("nav_text")
+        self.get_logger().info(
+            f"Starting Alpamayo inference from streaming data. nav_text={nav_text}"
+        )
         self._active_future = self._executor.submit(self._run_inference, payload)
         self._active_future.add_done_callback(self._on_future_done)
 
