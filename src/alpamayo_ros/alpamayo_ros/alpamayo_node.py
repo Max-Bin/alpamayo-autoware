@@ -229,37 +229,47 @@ class AlpamayoRosNode(Node):
     def _compute_nav_text(self, ego_pos_map: np.ndarray) -> Optional[str]:
         """Compute navigation instruction from ego position, route and lanelet map.
 
-        Finds the closest lanelet on the route to the ego, then looks ahead for
-        the next turn (left/right). Returns a string like "Turn left in 40m".
+        Finds the closest lanelet on the route using the first point of each
+        lanelet's centerline. If the ego is on a turning lanelet, returns the
+        turn direction immediately. Otherwise looks ahead for the next turn
+        and reports the distance.
         """
         if self._lanelet_map is None or not self._route_lanelet_ids:
             return None
 
-        # Find which route lanelet the ego is closest to
+        ego_xy = ego_pos_map[:2]
+
+        # Find which route lanelet the ego is closest to (using first centerline point)
         best_idx = 0
         best_dist = float("inf")
         for i, ll_id in enumerate(self._route_lanelet_ids):
             info = self._lanelet_map.get(ll_id)
             if info is None:
                 continue
-            dist = np.linalg.norm(info["center"] - ego_pos_map[:2])
+            first_pt = info["centerline"][0, :2]
+            dist = np.linalg.norm(first_pt - ego_xy)
             if dist < best_dist:
                 best_dist = dist
                 best_idx = i
 
-        # Look ahead from current position for next turn
-        cumulative_dist = 0.0
-        prev_center = ego_pos_map[:2]
+        # Check if ego is currently on a turning lanelet
+        current_info = self._lanelet_map.get(self._route_lanelet_ids[best_idx])
+        if current_info is not None and current_info["turn_direction"] in ("left", "right"):
+            return f"Turn {current_info['turn_direction']}"
 
-        for i in range(best_idx, len(self._route_lanelet_ids)):
+        # Look ahead for next turn, accumulating distance via first centerline points
+        cumulative_dist = 0.0
+        prev_pt = ego_xy
+
+        for i in range(best_idx + 1, len(self._route_lanelet_ids)):
             ll_id = self._route_lanelet_ids[i]
             info = self._lanelet_map.get(ll_id)
             if info is None:
                 continue
 
-            center = info["center"]
-            cumulative_dist += np.linalg.norm(center - prev_center)
-            prev_center = center
+            first_pt = info["centerline"][0, :2]
+            cumulative_dist += np.linalg.norm(first_pt - prev_pt)
+            prev_pt = first_pt
 
             turn_dir = info["turn_direction"]
             if turn_dir in ("left", "right"):
