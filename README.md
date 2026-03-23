@@ -1,4 +1,4 @@
-# Alpamayo ROS 2 Node Usage Guide
+# Alpamayo 1.5 ROS 2 Node Usage Guide
 
 ![Alpamayo Autoware Demo](images/alpamayo-autoware.gif)
 
