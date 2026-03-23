@@ -38,7 +38,7 @@ def load_physical_aiavdataset(
     """Load data from physical_ai_av for model inference.
 
     This function loads a sample from the physical_ai_av dataset and converts it
-    to the format expected by AlpamayoR1 model inference.
+    to the format expected by Alpamayo1_5 model inference.
 
     Args:
         clip_id: The clip ID to load data from. Can be obtained from vla_golden.parquet.

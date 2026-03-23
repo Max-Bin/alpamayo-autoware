@@ -18,7 +18,7 @@ from typing import Any
 import hydra.utils as hyu
 import torch
 
-from alpamayo_r1.action_space.action_space import ActionSpace
+from alpamayo1_5.action_space.action_space import ActionSpace
 
 
 class DiscreteTrajectoryTokenizer:

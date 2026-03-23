@@ -17,7 +17,7 @@ import logging
 
 import einops
 import torch
-from alpamayo_r1.geometry.rotation import round_2pi_torch, so3_to_yaw_torch
+from alpamayo1_5.geometry.rotation import round_2pi_torch, so3_to_yaw_torch
 
 logger = logging.getLogger(__name__)
 

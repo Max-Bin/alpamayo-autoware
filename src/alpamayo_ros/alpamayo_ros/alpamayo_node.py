@@ -17,19 +17,27 @@ import numpy as np
 import rclpy
 import torch
 from autoware_internal_debug_msgs.msg import StringStamped
-from autoware_planning_msgs.msg import Trajectory, TrajectoryPoint
+from autoware_planning_msgs.msg import LaneletRoute, Trajectory, TrajectoryPoint
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
 
-from alpamayo_r1 import helper
-from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpamayo1_5 import helper
+from alpamayo1_5.models.alpamayo1_5 import Alpamayo1_5
+
+try:
+    import lanelet2
+    from autoware_lanelet2_extension_python.projection import MGRSProjector
+
+    _HAS_LANELET2 = True
+except ImportError:
+    _HAS_LANELET2 = False
 
 
 class AlpamayoRosNode(Node):
@@ -38,21 +46,30 @@ class AlpamayoRosNode(Node):
     def __init__(self) -> None:
         super().__init__("alpamayo_node")
 
-        self.model_name: str = "nvidia/Alpamayo-R1-10B"
+        self.model_name: str = "nvidia/Alpamayo-1.5-10B"
         self.declare_parameter("trajectory_topic", "/alpamayo/predicted_trajectory")
         self.declare_parameter("cot_topic", "/alpamayo/reasoning")
         self.declare_parameter("cot_with_stamped_topic", "/alpamayo/reasoning_stamped")
+        self.declare_parameter("nav_text_topic", "/alpamayo/nav_text")
         self.declare_parameter("odometry_topic", "/localization/kinematic_state")
+        self.declare_parameter("route_topic", "/planning/mission_planning/route")
         self.declare_parameter("inference_period_sec", 0.1)
 
         # ROS2 Jazzy: Use non-empty default for string array parameters to properly infer type
         self.declare_parameter("camera_topics", [""])
+        # Camera indices matching CAMERA_DISPLAY_NAMES in helper.py:
+        # 0=Front left, 1=Front, 2=Front right, 3=Rear left, 4=Rear, 5=Rear right, 6=Front telephoto
+        # Each index corresponds to the camera topic at the same position in camera_topics.
+        self.declare_parameter("camera_indices", [0])
+
+        # Lanelet2 map file for navigation instruction generation
+        self.declare_parameter("lanelet2_map_path", "")
 
         self._device = torch.device("cuda")
         self._dtype = torch.bfloat16
 
         KINEMATIC_STATE_HZ = 50.0
-        ALPAMAYO_INPUT_HZ = 1.0
+        ALPAMAYO_INPUT_HZ = 10.0  # Model expects 10Hz (time_step=0.1s)
         self.skip_num = int(KINEMATIC_STATE_HZ / ALPAMAYO_INPUT_HZ)
 
         self._num_history_steps = 16
@@ -72,6 +89,10 @@ class AlpamayoRosNode(Node):
         self._cot_stamped_pub = self.create_publisher(StringStamped, cot_stamped_topic, queue_size)
         self.get_logger().info(f"Publishing reasoning traces (stamped) on {cot_stamped_topic}")
 
+        nav_text_topic = self.get_parameter("nav_text_topic").value
+        self._nav_text_pub = self.create_publisher(String, nav_text_topic, queue_size)
+        self.get_logger().info(f"Publishing navigation text on {nav_text_topic}")
+
         marker_topic = traj_topic + "_markers"
         self._marker_pub = self.create_publisher(MarkerArray, marker_topic, queue_size)
         self.get_logger().info(f"Publishing trajectory markers on {marker_topic}")
@@ -87,6 +108,16 @@ class AlpamayoRosNode(Node):
         if not camera_topics:
             raise ValueError("camera_topics parameter must list at least one image topic.")
         self._camera_topics = camera_topics
+
+        camera_indices = list(
+            self.get_parameter("camera_indices").get_parameter_value().integer_array_value
+        )
+        if len(camera_indices) != len(camera_topics):
+            raise ValueError(
+                f"camera_indices length ({len(camera_indices)}) must match "
+                f"camera_topics length ({len(camera_topics)})."
+            )
+        self._camera_indices = torch.tensor(camera_indices, dtype=torch.int64)
         self._camera_buffers: Dict[str, deque] = {
             topic: deque(maxlen=self._num_frames * 3) for topic in self._camera_topics
         }
@@ -115,11 +146,30 @@ class AlpamayoRosNode(Node):
         self.create_subscription(Odometry, odom_topic, self._odometry_callback, odom_qos)
         self.get_logger().info(f"Subscribed to odometry topic: {odom_topic}")
 
+        # --- Lanelet2 map & route for navigation instructions ---
+        self._lanelet_map = None  # dict[int, dict] mapping lanelet_id -> info
+        self._route_lanelet_ids: List[int] = []
+        self._nav_text: Optional[str] = None
+
+        lanelet2_map_path = self.get_parameter("lanelet2_map_path").value
+        if lanelet2_map_path:
+            self._load_lanelet2_map(lanelet2_map_path)
+
+        route_topic = self.get_parameter("route_topic").value
+        route_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.create_subscription(LaneletRoute, route_topic, self._route_callback, route_qos)
+        self.get_logger().info(f"Subscribed to route topic: {route_topic}")
+
         self._auto_timer = self.create_timer(inference_period, self._timer_callback)
         self.get_logger().info(
             f"Loading Alpamayo model {self.model_name} on device={self._device} dtype={self._dtype}"
         )
-        self._model = AlpamayoR1.from_pretrained(self.model_name, dtype=self._dtype).to(
+        self._model = Alpamayo1_5.from_pretrained(self.model_name, dtype=self._dtype).to(
             self._device
         )
         self._model.eval()
@@ -132,6 +182,94 @@ class AlpamayoRosNode(Node):
 
         self.get_logger().info("Alpamayo model loaded and ready.")
 
+    # --- Lanelet2 map loading ---
+
+    def _load_lanelet2_map(self, map_path: str) -> None:
+        """Load lanelet2 map and extract lanelet centerlines and turn directions."""
+        if not _HAS_LANELET2:
+            self.get_logger().warn(
+                "lanelet2 / autoware_lanelet2_extension_python not available. "
+                "Navigation instructions disabled."
+            )
+            return
+
+        self.get_logger().info(f"Loading lanelet2 map from {map_path}...")
+        projection = MGRSProjector(lanelet2.io.Origin(0.0, 0.0))
+        ll2_map = lanelet2.io.load(map_path, projection)
+
+        lanelet_info: dict[int, dict] = {}
+        for ll in ll2_map.laneletLayer:
+            subtype = ll.attributes.get("subtype", "") if hasattr(ll.attributes, "get") else ""
+            if not subtype:
+                subtype = ll.attributes["subtype"] if "subtype" in ll.attributes else ""
+            if subtype not in ("road", "highway", "road_shoulder", "bicycle_lane"):
+                continue
+
+            centerline = np.array([(p.x, p.y, p.z) for p in ll.centerline])
+            turn_dir_str = ""
+            if "turn_direction" in ll.attributes:
+                turn_dir_str = ll.attributes["turn_direction"]
+
+            lanelet_info[ll.id] = {
+                "centerline": centerline,
+                "turn_direction": turn_dir_str,
+                "center": np.mean(centerline[:, :2], axis=0),
+            }
+
+        self._lanelet_map = lanelet_info
+        self.get_logger().info(f"Loaded {len(lanelet_info)} road lanelets from map.")
+
+    def _route_callback(self, msg: LaneletRoute) -> None:
+        """Store ordered lanelet IDs from the route."""
+        self._route_lanelet_ids = [seg.preferred_primitive.id for seg in msg.segments]
+        self.get_logger().info(
+            f"Received route with {len(self._route_lanelet_ids)} segments."
+        )
+
+    def _compute_nav_text(self, ego_pos_map: np.ndarray) -> Optional[str]:
+        """Compute navigation instruction from ego position, route and lanelet map.
+
+        Finds the closest lanelet on the route to the ego, then looks ahead for
+        the next turn (left/right). Returns a string like "Turn left in 40m".
+        """
+        if self._lanelet_map is None or not self._route_lanelet_ids:
+            return None
+
+        # Find which route lanelet the ego is closest to
+        best_idx = 0
+        best_dist = float("inf")
+        for i, ll_id in enumerate(self._route_lanelet_ids):
+            info = self._lanelet_map.get(ll_id)
+            if info is None:
+                continue
+            dist = np.linalg.norm(info["center"] - ego_pos_map[:2])
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+
+        # Look ahead from current position for next turn
+        cumulative_dist = 0.0
+        prev_center = ego_pos_map[:2]
+
+        for i in range(best_idx, len(self._route_lanelet_ids)):
+            ll_id = self._route_lanelet_ids[i]
+            info = self._lanelet_map.get(ll_id)
+            if info is None:
+                continue
+
+            center = info["center"]
+            cumulative_dist += np.linalg.norm(center - prev_center)
+            prev_center = center
+
+            turn_dir = info["turn_direction"]
+            if turn_dir in ("left", "right"):
+                dist_m = int(round(cumulative_dist))
+                return f"Turn {turn_dir} in {dist_m}m"
+
+        return "Continue straight"
+
+    # --- Core node logic ---
+
     def destroy_node(self) -> None:
         """Cleanup resources before shutting down."""
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -143,7 +281,10 @@ class AlpamayoRosNode(Node):
         payload = self._prepare_inference_payload()
         if payload is None:
             return
-        self.get_logger().info("Starting Alpamayo inference from streaming data.")
+        nav_text = payload.get("nav_text")
+        self.get_logger().info(
+            f"Starting Alpamayo inference from streaming data. nav_text={nav_text}"
+        )
         self._active_future = self._executor.submit(self._run_inference, payload)
         self._active_future.add_done_callback(self._on_future_done)
 
@@ -193,16 +334,30 @@ class AlpamayoRosNode(Node):
         ego_history_xyz = torch.from_numpy(history_xyz_local).unsqueeze(0).unsqueeze(0)
         ego_history_rot = torch.from_numpy(history_rot_local).unsqueeze(0).unsqueeze(0)
 
+        # Compute navigation text from current ego position (map frame)
+        ego_pos_map = positions_np[-1]
+        nav_text = self._compute_nav_text(ego_pos_map)
+        if nav_text and nav_text != self._nav_text:
+            self._nav_text = nav_text
+            self.get_logger().info(f"Navigation instruction: {nav_text}")
+
         return {
             "image_frames": image_frames,
+            "camera_indices": self._camera_indices,
             "ego_history_xyz": ego_history_xyz,
             "ego_history_rot": ego_history_rot,
+            "nav_text": self._nav_text,
         }
 
     def _run_inference(self, payload: dict) -> dict:
         start = time.time()
         frames = payload["image_frames"]
-        messages = helper.create_message(frames.flatten(0, 1))
+        messages = helper.create_message(
+            frames.flatten(0, 1),
+            camera_indices=payload["camera_indices"],
+            num_frames_per_camera=self._num_frames,
+            nav_text=payload.get("nav_text"),
+        )
         processor_inputs = self._processor.apply_chat_template(
             messages,
             tokenize=True,
@@ -242,6 +397,12 @@ class AlpamayoRosNode(Node):
 
         marker_array = self._trajectory_to_markers(trajectory)
         self._marker_pub.publish(marker_array)
+
+        nav_text = payload.get("nav_text")
+        if nav_text:
+            nav_msg = String()
+            nav_msg.data = nav_text
+            self._nav_text_pub.publish(nav_msg)
 
         cot_text = self._extract_text(extra, "cot")
         if cot_text:
