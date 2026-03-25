@@ -393,10 +393,20 @@ class AlpamayoRosNode(Node):
         }
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            pred_xyz, pred_rot, extra = self._model.sample_trajectories_from_data_with_vlm_rollout(
-                data=model_inputs,
-                **generation_kwargs,
-            )
+            if payload.get("nav_text"):
+                pred_xyz, pred_rot, extra = (
+                    self._model.sample_trajectories_from_data_with_vlm_rollout_cfg_nav(
+                        data=model_inputs,
+                        **generation_kwargs,
+                    )
+                )
+            else:
+                pred_xyz, pred_rot, extra = (
+                    self._model.sample_trajectories_from_data_with_vlm_rollout(
+                        data=model_inputs,
+                        **generation_kwargs,
+                    )
+                )
 
         pred_xyz_cpu = pred_xyz.detach().cpu()
         pred_rot_cpu = pred_rot.detach().cpu()
