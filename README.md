@@ -30,7 +30,19 @@ Camera Topics (CompressedImage × 4)     Odometry Topic
 
 Image preprocessing runs entirely on GPU via `torchvision.io.decode_jpeg` + `F.interpolate`.
 
-Two expert modes:
+### Performance
+
+Benchmarked on NVIDIA RTX PRO 6000 (96 GB, SM120) with 4 cameras × 4 temporal frames at 1080×1920.
+
+| Configuration | Latency | FPS | Trajectory Deviation |
+|---------------|---------|-----|----------------------|
+| Original (CPU preproc, sampling, native, 10-step) | 1.018s | 1.0 | Reference |
+| GPU preproc + greedy + native expert + 10-step | 0.862s | 1.2 | ~0% |
+| GPU preproc + greedy + native expert + 5-step | 0.768s | 1.3 | ~0.9% |
+| GPU preproc + greedy + TRT expert + 10-step | 0.751s | 1.3 | ~0.3% |
+| **Full optimized** (GPU + greedy + TRT + 5-step) | **0.714s** | **1.4** | **~1.2%** |
+
+### Modes
 
 | Mode | Expert | Decode | Diffusion | Use case |
 |------|--------|--------|-----------|----------|
