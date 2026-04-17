@@ -96,15 +96,15 @@ First build the TRT expert engine (one-time):
 
 ```bash
 uv sync --active --group trt
-python3 scripts/build_trt_expert_engine.py \
-  --output-dir ~/.cache/alpamayo/trt/alpamayo-r1-expert
+python3 scripts/build_trt_expert_engine.py
+# Output: ~/autoware_data/alpamayo/v0.1/expert_step.int8.qdq.onnx
 ```
 
 Then launch with TRT expert and optional speed settings:
 
 ```bash
 ros2 launch alpamayo_ros alpamayo.launch.py \
-  expert_onnx_path:=$HOME/.cache/alpamayo/trt/alpamayo-r1-expert/expert_step.int8.qdq.onnx \
+  expert_onnx_path:=$HOME/autoware_data/alpamayo/v0.1/expert_step.int8.qdq.onnx \
   num_diffusion_steps:=5 \
   use_greedy_decode:=true
 ```

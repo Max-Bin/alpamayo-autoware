@@ -26,7 +26,7 @@ from alpamayo_r1.trt.export import (
 
 DEFAULT_CLIP_ID = "030c760c-ae38-49aa-9ad8-f5650a545d26"
 DEFAULT_T0_US = 5_100_000
-DEFAULT_OUTPUT_DIR = "~/.cache/alpamayo/trt/alpamayo-r1-expert"
+DEFAULT_OUTPUT_DIR = "~/autoware_data/alpamayo/v0.1"
 
 
 class CalibrationCollector:
