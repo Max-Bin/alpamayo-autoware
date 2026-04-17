@@ -104,14 +104,21 @@ ros2 launch alpamayo_ros alpamayo.launch.py
 
 ### Optimized Mode (TRT Expert)
 
-First build the TRT expert engine (one-time). Specify `--output-dir` to control where ONNX and engine files are stored:
+The TRT engine build requires `physical_ai_av` for calibration data, which needs Python >= 3.11. ROS 2 Humble ships Python 3.10 and cannot install this package. Use a **separate Python 3.12 venv** for building the engine, then use the exported ONNX file in the ROS 2 (3.10) runtime environment.
+
+**Step 1: Build engine** (Python 3.12 venv, one-time):
 
 ```bash
-uv sync --active --group trt
+uv venv .venv-trt --python python3.12
+source .venv-trt/bin/activate
+uv pip install -r scripts/requirements-trt-build.txt
+
 python3 scripts/build_trt_expert_engine.py --output-dir /path/to/your/engines
 ```
 
 The script exports `expert_step.int8.qdq.onnx` and caches the compiled TRT engine under `engine_cache/` in the same directory.
+
+**Step 2: Run node** (Python 3.10, ROS 2 Humble):
 
 Then launch with the exported ONNX path:
 
