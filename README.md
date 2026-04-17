@@ -92,19 +92,20 @@ ros2 launch alpamayo_ros alpamayo.launch.py
 
 ### Optimized Mode (TRT Expert)
 
-First build the TRT expert engine (one-time):
+First build the TRT expert engine (one-time). Specify `--output-dir` to control where ONNX and engine files are stored:
 
 ```bash
 uv sync --active --group trt
-python3 scripts/build_trt_expert_engine.py
-# Output: ~/autoware_data/alpamayo/v0.1/expert_step.int8.qdq.onnx
+python3 scripts/build_trt_expert_engine.py --output-dir /path/to/your/engines
 ```
 
-Then launch with TRT expert and optional speed settings:
+The script exports `expert_step.int8.qdq.onnx` and caches the compiled TRT engine under `engine_cache/` in the same directory.
+
+Then launch with the exported ONNX path:
 
 ```bash
 ros2 launch alpamayo_ros alpamayo.launch.py \
-  expert_onnx_path:=$HOME/autoware_data/alpamayo/v0.1/expert_step.int8.qdq.onnx \
+  expert_onnx_path:=/path/to/your/engines/expert_step.int8.qdq.onnx \
   num_diffusion_steps:=5 \
   use_greedy_decode:=true
 ```
