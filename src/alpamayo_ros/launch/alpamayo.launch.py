@@ -1,4 +1,6 @@
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -12,6 +14,10 @@ def generate_launch_description() -> LaunchDescription:
     ]
     return LaunchDescription(
         [
+            DeclareLaunchArgument("use_sim_time", default_value="false"),
+            DeclareLaunchArgument("expert_onnx_path", default_value=""),
+            DeclareLaunchArgument("num_diffusion_steps", default_value="10"),
+            DeclareLaunchArgument("use_greedy_decode", default_value="false"),
             Node(
                 package="alpamayo_ros",
                 executable="alpamayo_node",
@@ -19,15 +25,17 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=[
                     {
-                        "auto_run": True,
+                        "use_sim_time": LaunchConfiguration("use_sim_time"),
                         "camera_topics": default_camera_topics,
                         "odometry_topic": "/localization/kinematic_state",
                         "trajectory_topic": "/alpamayo/predicted_trajectory",
                         "cot_topic": "/alpamayo/reasoning",
-                        "cot_with_stamped_topic": "/alpamayo/reasoning_stamped",
                         "inference_period_sec": 1.0,
+                        "expert_onnx_path": LaunchConfiguration("expert_onnx_path"),
+                        "num_diffusion_steps": LaunchConfiguration("num_diffusion_steps"),
+                        "use_greedy_decode": LaunchConfiguration("use_greedy_decode"),
                     }
                 ],
-            )
+            ),
         ]
     )
