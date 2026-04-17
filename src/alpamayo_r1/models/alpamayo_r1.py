@@ -118,6 +118,16 @@ class AlpamayoR1(ReasoningVLA):
             self.action_out_proj = self.action_out_proj.to(dtype=expert_dtype)
 
         self.post_init()
+        self._expert_step_runner: Any | None = None
+        self._expert_step_observer: Any | None = None
+
+    def set_expert_step_runner(self, runner: Any | None) -> None:
+        """Attach a runtime override for the expert denoiser step."""
+        self._expert_step_runner = runner
+
+    def set_expert_step_observer(self, observer: Any | None) -> None:
+        """Attach an observer used to capture denoiser step inputs."""
+        self._expert_step_observer = observer
 
     def sample_trajectories_from_data_with_vlm_rollout(
         self,
@@ -250,6 +260,13 @@ class AlpamayoR1(ReasoningVLA):
         forward_kwargs = {}
         if self.config.expert_non_causal_attention:
             forward_kwargs["is_causal"] = False
+        trt_context = None
+        if self._expert_step_runner is not None:
+            trt_context = self._expert_step_runner.prepare_context(
+                prompt_cache=prompt_cache,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+            )
 
         # 2) Define denoising step that consumes noisy action and timestep
         def step_fn(
@@ -259,6 +276,20 @@ class AlpamayoR1(ReasoningVLA):
             # x: (B*, *action_dim)
             # t: broadcastable to x leading dims
             b_star = x.shape[0]
+            if self._expert_step_observer is not None:
+                self._expert_step_observer(
+                    {
+                        "x": x,
+                        "t": t,
+                        "position_ids": position_ids,
+                        "attention_mask": attention_mask,
+                        "prompt_cache": prompt_cache,
+                    }
+                )
+
+            if self._expert_step_runner is not None:
+                return self._expert_step_runner.step(x=x, t=t, context=trt_context)
+
             # Project noisy action to expert token embeddings for the n future tokens
             # Expect shape (b*, n_token_per_traj, hidden_size)
             future_token_embeds = self.action_in_proj(x, t)
