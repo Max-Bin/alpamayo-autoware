@@ -265,7 +265,10 @@ class Alpamayo1_5(ReasoningVLA):
         generation_config.do_sample = True
         generation_config.num_return_sequences = num_traj_samples
         generation_config.max_new_tokens = max_generation_length
-        generation_config.output_logits = True
+        # Downstream only reads vlm_outputs.sequences / past_key_values /
+        # rope_deltas — capturing per-step logits ([B, max_gen, ~156k vocab])
+        # is ~20 MB per token of pure waste on the host-pinned output buffer.
+        generation_config.output_logits = False
         generation_config.return_dict_in_generate = True
         generation_config.top_k = top_k
         generation_config.pad_token_id = self.tokenizer.pad_token_id
@@ -329,8 +332,6 @@ class Alpamayo1_5(ReasoningVLA):
             x: torch.Tensor,
             t: torch.Tensor,
         ) -> torch.Tensor:
-            # x: (B*, *action_dim)
-            # t: broadcastable to x leading dims
             b_star = x.shape[0]
             # Project noisy action to expert token embeddings for the n future tokens
             # Expect shape (b*, n_token_per_traj, hidden_size)
@@ -455,7 +456,10 @@ class Alpamayo1_5(ReasoningVLA):
         generation_config.do_sample = True
         generation_config.num_return_sequences = num_traj_samples
         generation_config.max_new_tokens = max_generation_length
-        generation_config.output_logits = True
+        # Downstream only reads vlm_outputs.sequences / past_key_values /
+        # rope_deltas — capturing per-step logits ([B, max_gen, ~156k vocab])
+        # is ~20 MB per token of pure waste on the host-pinned output buffer.
+        generation_config.output_logits = False
         generation_config.return_dict_in_generate = True
         generation_config.top_k = top_k
         generation_config.pad_token_id = self.tokenizer.pad_token_id
