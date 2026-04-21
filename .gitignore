@@ -221,3 +221,6 @@ __marimo__/
 /models/
 /artifacts/
 /third_party/
+# Exception: this branch vendors the upstream DFlash source so the
+# speculative-decoding infrastructure is self-contained.
+!/third_party/dflash/
