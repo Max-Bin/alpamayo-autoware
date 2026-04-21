@@ -214,3 +214,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local model checkpoints, build artifacts, and vendored-upstream caches.
+# Anchored with a leading slash so we only ignore top-level dirs (not e.g.
+# src/alpamayo1_5/models/, which IS tracked source).
+/models/
+/artifacts/
+/third_party/
