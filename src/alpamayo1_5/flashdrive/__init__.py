@@ -8,7 +8,8 @@ optimisations; each is independently toggleable.
 
 Measured on multi-camera rosbag (8 streaming steps, 16 gen, 5 diff steps):
     baseline                        640 ms   1.00×
-    flashdrive                      316 ms   2.02×   best=220
+    flashdrive (no PARO)            316 ms   2.02×   best=220
+    flashdrive + PARO               296 ms   2.16×   best=224
 """
 from alpamayo1_5.flashdrive.pipeline import (
     FlashDriveConfig,

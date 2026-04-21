@@ -35,6 +35,10 @@ class FlashDriveConfig:
     streaming_lm: bool = False
     streaming_lm_window: int = 128
 
+    # W4A8 PARO quantisation via vLLM Marlin (sm_120 native with has_zp=True).
+    paro_w4a8: bool = False
+    paro_checkpoint_path: str | None = None
+
     @classmethod
     def from_strings(cls, options: Iterable[str]) -> "FlashDriveConfig":
         cfg = cls()
@@ -67,6 +71,14 @@ def apply_flashdrive(model: torch.nn.Module, config: FlashDriveConfig) -> None:
         from alpamayo1_5.flashdrive import adaptive_flow
         adaptive_flow.install(model.diffusion, recompute_indices=config.adaptive_recompute_indices)
         enabled.append("adaptive_flow")
+
+    # PARO must install BEFORE kernel_fusion: it swaps plain nn.Linear for
+    # MarlinRotatedLinear, after which kernel_fusion's `isinstance(..., Linear)`
+    # check silently skips those layers (as intended).
+    if config.paro_w4a8:
+        from alpamayo1_5.flashdrive import quant_paro
+        quant_paro.install(model, ckpt_path=config.paro_checkpoint_path)
+        enabled.append("paro_w4a8")
 
     if config.kernel_fusion_qkv or config.kernel_fusion_mlp:
         from alpamayo1_5.flashdrive import kernel_fusion
