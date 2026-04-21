@@ -213,12 +213,13 @@ frames and an 8-step streaming window:
 
 | Config                             | p50 (ms) | best step (ms) | speedup |
 | ---------------------------------- | -------- | -------------- | ------- |
-| baseline (bf16, 5-step diffusion)  | 640      | 640            | 1.00×   |
-| FlashDrive                         | 316      | 220            | 2.02×   |
+| baseline (upstream, 10-step diff)  | 711      | 669            | 1.00×   |
+| FlashDrive (5-step diff + stack)   | 292      | 146            | 2.44×   |
 
-Reproduction harness: `scripts/bench_streaming_e2e.py`, invoked on an
-8-step streaming window, 16 generated tokens, 5 diffusion steps, greedy
-decode (see [Reproducing the bench](#reproducing-the-bench) below).
+Baseline runs the upstream inference path with `num_inference_steps=10`
+(FlowMatching's default). FlashDrive cuts that to 5 Euler steps via
+`adaptive_flow` and adds the four remaining toggles; reproducing the
+table is a single command (see below).
 
 ### Prerequisites for the bench
 
@@ -278,13 +279,15 @@ Five toggles are independent — drop any to A/B isolate contributions.
 PYTHONPATH=src python scripts/bench_streaming_e2e.py \
   --teacher models/Alpamayo-1.5-10B-finetuned \
   --bag     /path/to/rosbag \
-  --steps   8 --max-gen-tokens 16 --diffusion-steps 5
+  --steps   8 --max-gen-tokens 16
 ```
 
-The script loads the checkpoint, applies the stack, streams real JPEG
-frames from the rosbag (ten `/sensing/camera/camera{0,1,2,7}/image_raw/compressed`
-topics by default — see `DEFAULT_CAMERA_TOPICS` in the script), and reports
-per-step p50 / best / worst wall-clock ms under each config.
+Baseline uses 10 diffusion steps (upstream default, `--baseline-diffusion-steps`);
+FlashDrive configs use 5 (`--diffusion-steps`). Both are run in the same
+invocation for a fair side-by-side. The script streams real JPEG frames
+from the rosbag (`/sensing/camera/camera{0,1,2,7}/image_raw/compressed`
+topics — see `DEFAULT_CAMERA_TOPICS` in the script) and reports per-step
+p50 / best / worst wall-clock ms under each config.
 
 Further bench harnesses (stage-level, synthetic-input — handy for
 isolating per-Linear speedups without a rosbag handy):
@@ -293,46 +296,16 @@ isolating per-Linear speedups without a rosbag handy):
 - `scripts/bench_streaming_vision.py` — ViT-cache ablation
 - `scripts/bench_stage_breakdown.py` — per-stage latency breakdown
 
-### How FlashDrive relates to the ROS node
-
-The ROS node's `num_diffusion_steps=5`, `use_greedy_decode=true`, and
-GPU-side JPEG decode / processor path (via
-`torchvision.io.decode_jpeg(device="cuda")` + `Qwen2VLImageProcessorFast(device="cuda")`)
-are independent of `apply_flashdrive` — they're baked into the node as
-solid defaults. The **full 2.02× only comes from also calling
-`apply_flashdrive(model, ...)`** after loading the model (not done by
-default in the node; wire it into `AlpamayoNode.__init__` if you need it
-at runtime).
-
 ## License and Disclaimer
 
-- Inference code in this repo (including `src/alpamayo1_5/flashdrive/` and
-  `src/alpamayo_ros/`): Apache License 2.0
-- Alpamayo 1.5 model weights (nvidia/Alpamayo-1.5-10B): Non-commercial license
+- Inference code: Apache License 2.0
+- Model weights: Non-commercial license
 
-For the Alpamayo base-model terms see the
-[HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-1.5-10B).
+The FlashDrive acceleration stack in `src/alpamayo1_5/flashdrive/` is a
+re-implementation of ideas from [Z Lab's FlashDrive](https://z-lab.ai/projects/flashdrive/).
+
+For details, see the [HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-1.5-10B).
 
 Alpamayo 1.5 is a pre-trained reasoning model for research purposes and is not
 a complete autonomous driving stack. It is not intended for use in production
 environments.
-
-### Third-party components
-
-The FlashDrive stack in this repo stands on the following upstream work:
-
-- **FlashDrive** — algorithm-system co-design for VLA inference
-  (Z Lab, https://z-lab.ai/projects/flashdrive/). The streaming vision cache,
-  streaming LM pre-RoPE KV scheme, and adaptive-step flow matching implemented
-  here are re-implementations of ideas from that work.
-- **Hugging Face Transformers** — Apache License 2.0. Qwen3-VL attention /
-  MLP modules are monkey-patched in place by `flashdrive/kernel_fusion.py`
-  and `flashdrive/streaming_lm.py`.
-- **PyTorch / torchvision** — BSD-3-Clause. Used for CUDA JPEG decode and
-  the fast Qwen image processor.
-- **Qwen3-VL-8B-Instruct** (Alibaba/Qwen, https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct)
-  and **Cosmos-Reason2-8B** (NVIDIA, https://huggingface.co/nvidia/Cosmos-Reason2-8B)
-  — upstream architectures the VLM half is loaded from; see those model cards
-  for their respective licences.
-- **FlashDriveVLA checkpoints**
-  (https://huggingface.co/FlashDriveVLA) — see each repo's `LICENSE` for terms.

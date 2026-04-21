@@ -135,12 +135,19 @@ def main():
                     help="number of streaming inference steps to simulate")
     ap.add_argument("--frames-per-camera", type=int, default=4)
     ap.add_argument("--max-gen-tokens", type=int, default=16)
-    ap.add_argument("--diffusion-steps", type=int, default=5)
-    ap.add_argument("--configs", nargs="+",
-                    default=["baseline",
-                             "streaming_vision",
-                             "adaptive_flow kernel_fusion_qkv kernel_fusion_mlp",
-                             "adaptive_flow kernel_fusion_qkv kernel_fusion_mlp streaming_vision"])
+    ap.add_argument("--diffusion-steps", type=int, default=5,
+                    help="Euler steps for non-baseline configs (FlashDrive preset = 5).")
+    ap.add_argument("--baseline-diffusion-steps", type=int, default=10,
+                    help="Euler steps for the 'baseline' config (upstream default = 10).")
+    ap.add_argument(
+        "--configs", nargs="+",
+        default=[
+            "baseline",
+            "adaptive_flow kernel_fusion_qkv kernel_fusion_mlp streaming_vision streaming_lm",
+        ],
+        help="space-separated toggles per group; 'baseline' disables all. "
+             "Default reproduces the README's two-row headline table.",
+    )
     args = ap.parse_args()
 
     device = torch.device("cuda")
@@ -169,12 +176,18 @@ def main():
     baseline_p50 = None
     for raw in args.configs:
         opts = raw.split()
-        label = "baseline" if opts == ["baseline"] else "+".join(opts)
-        print(f"\n=== config: {label} ===")
+        is_baseline = (opts == ["baseline"])
+        label = "baseline" if is_baseline else "+".join(opts)
+        # Baseline uses upstream's diffusion-step default (10); every other
+        # config uses --diffusion-steps (the FlashDrive paper preset = 5).
+        # 5 vs 10 Euler is itself one of the FlashDrive optimisations, so a
+        # fair comparison pits 10-step baseline against 5-step optimised.
+        this_diff_steps = args.baseline_diffusion_steps if is_baseline else args.diffusion_steps
+        print(f"\n=== config: {label}  (diffusion_steps={this_diff_steps}) ===")
         # Reload fresh to avoid cumulative install effects
         del model; torch.cuda.empty_cache()
         model = _load(args.teacher, torch.bfloat16, device)
-        if opts != ["baseline"]:
+        if not is_baseline:
             cfg = FlashDriveConfig.from_strings(opts)
             apply_flashdrive(model, cfg)
 
@@ -185,7 +198,7 @@ def main():
         )
         for _ in range(2):
             _run_step(model, batch0, ego_xyz, ego_rot,
-                      max_gen=args.max_gen_tokens, num_steps=args.diffusion_steps)
+                      max_gen=args.max_gen_tokens, num_steps=this_diff_steps)
 
         ts = []
         for s in range(args.steps):
@@ -194,7 +207,7 @@ def main():
                 frames_per_camera=args.frames_per_camera,
             )
             ms = _run_step(model, batch, ego_xyz, ego_rot,
-                           max_gen=args.max_gen_tokens, num_steps=args.diffusion_steps)
+                           max_gen=args.max_gen_tokens, num_steps=this_diff_steps)
             ts.append(ms)
         p50 = st.median(ts)
         if baseline_p50 is None:
