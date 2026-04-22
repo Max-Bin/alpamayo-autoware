@@ -1,203 +1,222 @@
-# Alpamayo 1.5 ROS 2 Node Usage Guide
+# Alpamayo 1.5 ROS 2 Node
 
 ![Alpamayo Autoware Demo](images/alpamayo-autoware.gif)
 
-This guide explains how to set up and run the Alpamayo ROS 2 node.
+ROS 2 node for [Alpamayo 1.5](https://huggingface.co/nvidia/Alpamayo-1.5-10B) end-to-end trajectory planning in [Autoware](https://autoware.org/).
+
+## Architecture
+
+```text
+Camera Topics (CompressedImage × 4)     Odometry Topic
+        │                                      │
+        ▼                                      ▼
+┌─────────────────────────────────────────────────────┐
+│                 Alpamayo 1.5 ROS Node                │
+│                                                     │
+│  GPU JPEG Decode ──► Tokenizer ──► VLM (BF16)      │
+│  (torchvision)                        │             │
+│                                  KV Cache           │
+│                                       │             │
+│                          Expert Denoiser            │
+│                    (native PyTorch or TRT FP16)     │
+│                                       │             │
+│                          Trajectory Decode          │
+└──────────────────────────┬──────────────────────────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+         Trajectory    CoT Text     Markers
+```
+
+Image preprocessing runs entirely on GPU: `torchvision.io.decode_jpeg` →
+`F.interpolate` → `Qwen2VLImageProcessorFast(device="cuda")`. Decoded
+pixels stay on GPU through normalize + patchify, eliminating the
+~20 MB/inference round-trip to host memory that the CPU fast-path
+incurred.
+
+### Modes
+
+| Mode | Expert | Decode | Diffusion | Use case |
+|------|--------|--------|-----------|----------|
+| **Baseline** | PyTorch native | Nucleus (top_p=0.98) | 10 steps | Reference quality |
+| **Optimized** (default) | TRT FP16 engine | Greedy | 5–10 steps | Low-latency deployment |
+
+Defaults are tuned for the optimized mode: 5-step diffusion +
+greedy decode + `output_logits = False` on the VLM rollout. Flip
+`num_diffusion_steps:=10` / `use_greedy_decode:=false` to reproduce
+the baseline quality profile.
+
+### Performance
+
+Benchmarked on NVIDIA RTX PRO 6000 (96 GB, SM120) with 4 cameras × 4 temporal frames at 1080×1920.
+
+Latency is measured end-to-end by replaying a Tier IV rosbag through
+the ROS 2 node (`rate=0.5`, `max_generation_length=16`, 120 s warmup);
+medians are taken over 15+ per-inference samples from the node's
+`Alpamayo inference completed in X.XXs` log lines. Trajectory
+Deviation is `minADE / ground-truth path length` measured over
+`num_traj_samples=6` on the Physical AI AV clip used for TRT
+calibration (`030c760c-ae38-49aa-9ad8-f5650a545d26 @ t0_us=5_100_000`,
+GT path length = 46.64 m), same methodology as
+`src/alpamayo1_5/test_inference.py`.
+
+| Configuration | Latency | FPS | Trajectory Deviation |
+|---------------|---------|-----|----------------------|
+| Original (CPU preproc, sampling, native, 10-step) | 0.820s | 1.22 | Reference |
+| GPU preproc + greedy + native expert + 10-step | 0.820s | 1.22 | ~0.4% |
+| GPU preproc + greedy + native expert + 5-step | 0.720s | 1.39 | ~0.4% |
+| GPU preproc + greedy + TRT expert + 10-step | 0.700s | 1.43 | ~1.3% |
+| GPU preproc + greedy + TRT expert + 5-step | 0.660s | 1.52 | ~1.8% |
+| **Full optimized** (GPU-resident preproc + greedy + TRT + 5-step) | **0.600s** | **1.67** | **~1.8%** |
 
 ## Prerequisites
 
-| Requirement | Specification                                |
-| ----------- | -------------------------------------------- |
-| **Python**  | 3.10.x (for compatibility with ROS 2 Humble) |
-| **ROS 2**   | Humble (must be installed)                   |
-| **GPU**     | NVIDIA GPU (24 GB+ VRAM recommended)         |
-| **OS**      | Linux (tested)                               |
+| Requirement | Specification |
+|-------------|----------------------------------------------|
+| **Python** | 3.10.x (ROS 2 Humble compatibility) |
+| **ROS 2** | Humble |
+| **GPU** | NVIDIA GPU with 24 GB+ VRAM |
+| **CUDA** | 12.x+ |
 
-## Setup Instructions
+## Setup
 
 ### 1. Install uv
-
-If not already installed, install uv using the following command:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### 2. Create Virtual Environment with Python 3.10
-
-**Important**: You must use Python 3.10 for compatibility with ROS 2 Humble.
-
-Remove any existing venv and recreate it with Python 3.10:
+### 2. Create Virtual Environment
 
 ```bash
-# Remove existing venv (if it exists)
-rm -rf a1_5_venv
-
-# Create new venv with Python 3.10
 uv venv a1_5_venv --python python3.10
-
-# Activate the virtual environment
 source a1_5_venv/bin/activate
-
-# Install dependencies
 uv sync --active
 ```
 
 ### 3. HuggingFace Authentication
 
-Request access to the Alpamayo model and dataset:
-
-- [Physical AI AV Dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles)
-- [Alpamayo Model Weights](https://huggingface.co/nvidia/Alpamayo-1.5-10B)
-
-Once access is granted, authenticate using the HuggingFace CLI:
-
 ```bash
-# Install HuggingFace Hub (if not already installed)
-pip install huggingface_hub
-
-# Login with your token
 huggingface-cli login
 ```
 
-You can obtain your access token at: <https://huggingface.co/settings/tokens>
+Request access: [Alpamayo-1.5-10B](https://huggingface.co/nvidia/Alpamayo-1.5-10B)
 
-## Running the ROS 2 Node
+## Running
 
-### Method 1: Direct Script Execution (Recommended)
-
-Source the ROS 2 environment and run the node using Python from the virtual environment:
+### Baseline Mode
 
 ```bash
-# Source ROS 2 environment
 source /opt/ros/humble/setup.bash
-
-# Source Autoware environment (need to change correct path)
-source ~/workspace/autoware/install/setup.bash
-
-# Activate virtual environment
 source a1_5_venv/bin/activate
 
-# Run the node
+# Direct execution
 python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args \
-  -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" \
+  -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', \
+  '/sensing/camera/camera1/image_raw/compressed', \
+  '/sensing/camera/camera4/image_raw/compressed', \
+  '/sensing/camera/camera2/image_raw/compressed']" \
   -p camera_indices:="[0, 1, 2, 6]"
 
-# Run the node (rosbag mode)
-# python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args \
-#   -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" \
-#   -p camera_indices:="[0, 1, 2, 6]" \
-#   -p use_sim_time:=true
-
-```
-
-### Method 2: Using colcon Build
-
-If you want to build as a ROS 2 package using colcon:
-
-```bash
-# Source ROS 2 environment
-source /opt/ros/humble/setup.bash
-
-# Source Autoware environment (need to change correct path)
-source ~/workspace/autoware/install/setup.bash
-# Activate virtual environment
-source a1_5_venv/bin/activate
-
-# Build the package
-colcon build --packages-select alpamayo_ros --symlink-install
-
-# Source the workspace
-source install/setup.bash
-
-# Run the node
-python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args \
-  -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" \
-  -p camera_indices:="[0, 1, 2, 6]"
-
-# Run the node (rosbag mode)
-# python3 ./src/alpamayo_ros/alpamayo_ros/alpamayo_node.py --ros-args \
-#   -p camera_topics:="['/sensing/camera/camera3/image_raw/compressed', '/sensing/camera/camera1/image_raw/compressed', '/sensing/camera/camera4/image_raw/compressed', '/sensing/camera/camera2/image_raw/compressed']" \
-#   -p camera_indices:="[0, 1, 2, 6]" \
-#   -p use_sim_time:=true
-
-```
-
-### Method 3: Using Launch File
-
-If a launch file is available:
-
-```bash
-# Source ROS 2 environment and workspace
-source /opt/ros/humble/setup.bash
-source a1_5_venv/bin/activate
-
-# Source Autoware environment (need to change correct path)
-source ~/workspace/autoware/install/setup.bash
-
-# Run the launch file
+# Or via launch file
 ros2 launch alpamayo_ros alpamayo.launch.py
+```
+
+### Optimized Mode (TRT Expert)
+
+The TRT engine build requires `physical_ai_av` for calibration data, which needs Python >= 3.11. ROS 2 Humble ships Python 3.10 and cannot install this package. Use a **separate Python 3.12 venv** for building the engine, then use the exported ONNX file in the ROS 2 (3.10) runtime environment.
+
+**Step 1: Build engine** (Python 3.12 venv, one-time):
+
+```bash
+uv venv .venv-trt --python python3.12
+source .venv-trt/bin/activate
+uv pip install -r scripts/requirements-trt-build.txt
+
+python3 scripts/build_trt_expert_engine.py --output-dir /path/to/your/engines
+```
+
+The script exports `expert_step.int8.qdq.onnx` and caches the compiled TRT engine under `engine_cache/` in the same directory.
+
+**Step 2: Run node** (Python 3.10, ROS 2 Humble):
+
+```bash
+ros2 launch alpamayo_ros alpamayo.launch.py \
+  expert_onnx_path:=/path/to/your/engines/expert_step.int8.qdq.onnx \
+  num_diffusion_steps:=5 \
+  use_greedy_decode:=true
+```
+
+### Rosbag Replay Evaluation
+
+```bash
+# Terminal 1: launch with sim time
+ros2 launch alpamayo_ros alpamayo.launch.py use_sim_time:=true
+
+# Terminal 2: play bag
+ros2 bag play <bag_path> --clock --rate 0.5
 ```
 
 ## Parameters
 
-The Alpamayo node can be configured with the following ROS parameters:
-
-| Parameter | Default Value | Description |
-| --- | --- | --- |
-| `camera_topics` | (required) | List of camera image topics (CompressedImage type) |
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `camera_topics` | (required) | Camera image topics (CompressedImage) |
 | `camera_indices` | (required) | Camera index for each topic (0=Front left, 1=Front, 2=Front right, 3=Rear left, 4=Rear, 5=Rear right, 6=Front telephoto) |
 | `odometry_topic` | `/localization/kinematic_state` | Odometry topic |
-| `trajectory_topic` | `/alpamayo/predicted_trajectory` | Output topic for predicted trajectory |
-| `cot_topic` | `/alpamayo/reasoning` | Output topic for reasoning trace |
-| `cot_with_stamped_topic` | `/alpamayo/reasoning_stamped` | Output topic for timestamped reasoning trace |
-| `inference_period_sec` | `0.1` | Inference execution period (seconds) |
-| `use_sim_time` | `false` | Whether to use simulation time |
-
-## Troubleshooting
-
-### Python Version Mismatch
-
-If you see error message `ModuleNotFoundError: No module named 'rclpy._rclpy_pybind11'`:
-
-- Cause: The venv was created with a Python version other than 3.10
-- Solution: Follow step 2 above to recreate the venv with Python 3.10
-
-### CUDA Out-of-Memory Errors
-
-If you encounter memory errors:
-
-1. Ensure you're using a GPU with at least 24 GB VRAM
-2. Close other GPU-intensive applications
-3. Increase the inference period (`inference_period_sec`)
-
-### Flash Attention Issues
-
-If you encounter compatibility issues with Flash Attention 2, you can use an alternative implementation in the model code:
-
-```python
-config.attn_implementation = "sdpa"
-```
-
-### Slow Model Download
-
-On first run, the model weights (approximately 22 GB) will be downloaded. This can take time depending on your connection speed (approximately 2.5 minutes on a 100 MB/s connection).
+| `route_topic` | `/planning/mission_planning/route` | Route topic (for navigation text) |
+| `trajectory_topic` | `/alpamayo/predicted_trajectory` | Output trajectory topic |
+| `cot_topic` | `/alpamayo/reasoning` | Output CoT reasoning topic |
+| `cot_with_stamped_topic` | `/alpamayo/reasoning_stamped` | Timestamped reasoning topic |
+| `nav_text_topic` | `/alpamayo/nav_text` | Navigation text topic |
+| `inference_period_sec` | `0.1` | Inference trigger period |
+| `expert_onnx_path` | `""` | TRT expert ONNX path (empty = native PyTorch) |
+| `num_diffusion_steps` | `5` | Diffusion steps (10 = quality, 5 = speed) |
+| `use_greedy_decode` | `true` | Greedy decode (faster, deterministic) |
+| `top_p` | `0.98` | Nucleus sampling threshold |
+| `temperature` | `0.6` | Sampling temperature |
+| `max_generation_length` | `64` | VLM token budget per tick |
+| `use_sim_time` | `false` | Use ROS simulation time |
 
 ## Output Topics
 
-The node publishes the following topics:
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/alpamayo/predicted_trajectory` | `autoware_planning_msgs/Trajectory` | 64-waypoint trajectory |
+| `/alpamayo/reasoning` | `std_msgs/String` | Chain-of-thought reasoning |
+| `/alpamayo/reasoning_stamped` | `autoware_internal_debug_msgs/StringStamped` | Timestamped reasoning |
+| `/alpamayo/nav_text` | `std_msgs/String` | Derived navigation instruction |
+| `{trajectory_topic}_markers` | `visualization_msgs/MarkerArray` | RViz visualization |
 
-- `/alpamayo/predicted_trajectory` (autoware_planning_msgs/Trajectory): Predicted vehicle trajectory
-- `/alpamayo/reasoning` (std_msgs/String): Chain-of-Causation reasoning text
-- `/alpamayo/reasoning_stamped` (autoware_internal_debug_msgs/StringStamped): Timestamped reasoning text
-- `/alpamayo/predicted_trajectory_markers` (visualization_msgs/MarkerArray): Visualization markers for RViz
+## TRT Expert Engine Build
 
-## License and Disclaimer
+The `scripts/build_trt_expert_engine.py` script exports the expert denoiser to ONNX, applies SmoothQuant + INT8 quantization, and compiles a TensorRT engine:
+
+```bash
+python3 scripts/build_trt_expert_engine.py --help
+```
+
+Key options: `--num-calibration-samples`, `--calibration-method`, `--smoothquant-alpha`, `--skip-validation`.
+
+Requires the `trt` dependency group: `uv sync --active --group trt`
+
+## Troubleshooting
+
+**`ModuleNotFoundError: No module named 'rclpy._rclpy_pybind11'`** — Recreate venv with Python 3.10.
+
+**CUDA OOM** — Use GPU with 24 GB+ VRAM. Increase `inference_period_sec`.
+
+**Flash Attention issues** — Set `config.attn_implementation = "sdpa"` as fallback.
+
+## References
+
+- [Alpamayo](https://github.com/NVlabs/alpamayo) — Model weights, training, evaluation
+- [alpamayo-autoware](https://github.com/autowarefoundation/alpamayo-autoware) — This repository
+
+## License
 
 - Inference code: Apache License 2.0
-- Model weights: Non-commercial license
+- Model weights: Non-commercial license ([HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-1.5-10B))
 
-For details, see the [HuggingFace Model Card](https://huggingface.co/nvidia/Alpamayo-1.5-10B).
-
-Alpamayo 1 is a pre-trained reasoning model for research purposes and is not a complete autonomous driving stack. It is not intended for use in production environments.
+Alpamayo 1.5 is a pre-trained reasoning model for research purposes and is not a complete autonomous driving stack. It is not intended for use in production environments.
