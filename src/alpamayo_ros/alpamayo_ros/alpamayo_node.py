@@ -10,6 +10,7 @@ import math
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 from typing import Dict, List, Optional
 
 # cv2 is no longer needed for the image preproc path (decode runs on
@@ -79,6 +80,11 @@ class AlpamayoRosNode(Node):
         self.declare_parameter("top_p", 0.98)
         self.declare_parameter("temperature", 0.6)
         self.declare_parameter("max_generation_length", 64)
+        # Optional TRT FP16 expert engine. Empty string → use the native
+        # PyTorch denoiser step. Set to an ONNX file produced by
+        # ``scripts/build_trt_expert_engine.py`` to swap in a TrtExpertEngine
+        # runtime for the 5-step diffusion inner loop.
+        self.declare_parameter("expert_onnx_path", "")
 
         self._device = torch.device("cuda")
         self._dtype = torch.bfloat16
@@ -188,6 +194,23 @@ class AlpamayoRosNode(Node):
             self._device
         )
         self._model.eval()
+
+        # Optional TRT FP16 expert engine — swap in if expert_onnx_path set
+        # and the file exists. Falls back silently to native PyTorch otherwise.
+        expert_onnx = str(self.get_parameter("expert_onnx_path").value or "")
+        if expert_onnx and Path(expert_onnx).exists():
+            from alpamayo1_5.trt.expert_runtime import TrtExpertEngine
+
+            engine = TrtExpertEngine(
+                onnx_model_path=expert_onnx,
+                engine_cache_dir=str(Path(expert_onnx).parent / "engine_cache"),
+                enable_int8=False,
+                enable_fp16=True,
+            )
+            self._model.set_expert_step_runner(engine)
+            self.get_logger().info(f"TRT Expert loaded: {expert_onnx}")
+        else:
+            self.get_logger().info("TRT Expert: off (native PyTorch denoiser).")
 
         # Apply diffusion-step override (R1's 5-step preset is the
         # optimized default; native model config is 10).
