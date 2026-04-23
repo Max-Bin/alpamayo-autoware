@@ -126,7 +126,27 @@ class Alpamayo1_5(ReasoningVLA):
             self.action_in_proj = self.action_in_proj.to(dtype=expert_dtype)
             self.action_out_proj = self.action_out_proj.to(dtype=expert_dtype)
 
+        # Optional runtime override for the expert-denoiser step. Plug a
+        # TrtExpertEngine (or any object exposing ``prepare_context`` +
+        # ``step``) here to replace the PyTorch expert call inside
+        # ``sample_trajectories_*``'s ``step_fn`` with a TRT engine invocation.
+        self._expert_step_runner: Any | None = None
+        # Optional observer fired with each denoiser-step inputs — used by
+        # ``scripts/build_trt_expert_engine.py`` to collect calibration data.
+        self._expert_step_observer: Any | None = None
+
         self.post_init()
+
+    def set_expert_step_runner(self, runner: Any | None) -> None:
+        """Install (or clear) an expert-denoiser runner. ``None`` restores the
+        native PyTorch path."""
+        self._expert_step_runner = runner
+
+    def set_expert_step_observer(self, observer: Any | None) -> None:
+        """Install (or clear) a per-step observer. The observer is called with
+        a dict of the current step's inputs (``x``, ``t``, ``position_ids``,
+        ``attention_mask``, ``prompt_cache``) before the expert forward."""
+        self._expert_step_observer = observer
 
     @staticmethod
     def _find_eos_offset(
@@ -265,7 +285,10 @@ class Alpamayo1_5(ReasoningVLA):
         generation_config.do_sample = True
         generation_config.num_return_sequences = num_traj_samples
         generation_config.max_new_tokens = max_generation_length
-        generation_config.output_logits = True
+        # Downstream only reads vlm_outputs.sequences / past_key_values /
+        # rope_deltas — capturing per-step logits ([B, max_gen, ~156k vocab])
+        # is ~20 MB per token of pure waste on the host-pinned output buffer.
+        generation_config.output_logits = False
         generation_config.return_dict_in_generate = True
         generation_config.top_k = top_k
         generation_config.pad_token_id = self.tokenizer.pad_token_id
@@ -324,13 +347,32 @@ class Alpamayo1_5(ReasoningVLA):
         if self.config.expert_non_causal_attention:
             forward_kwargs["is_causal"] = False
 
+        trt_context = None
+        if self._expert_step_runner is not None:
+            trt_context = self._expert_step_runner.prepare_context(
+                prompt_cache=prompt_cache,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+            )
+
         # 2) Define denoising step that consumes noisy action and timestep
         def step_fn(
             x: torch.Tensor,
             t: torch.Tensor,
         ) -> torch.Tensor:
-            # x: (B*, *action_dim)
-            # t: broadcastable to x leading dims
+            if self._expert_step_observer is not None:
+                self._expert_step_observer(
+                    {
+                        "x": x,
+                        "t": t,
+                        "position_ids": position_ids,
+                        "attention_mask": attention_mask,
+                        "prompt_cache": prompt_cache,
+                    }
+                )
+            if self._expert_step_runner is not None:
+                return self._expert_step_runner.step(x=x, t=t, context=trt_context)
+
             b_star = x.shape[0]
             # Project noisy action to expert token embeddings for the n future tokens
             # Expect shape (b*, n_token_per_traj, hidden_size)
@@ -455,7 +497,10 @@ class Alpamayo1_5(ReasoningVLA):
         generation_config.do_sample = True
         generation_config.num_return_sequences = num_traj_samples
         generation_config.max_new_tokens = max_generation_length
-        generation_config.output_logits = True
+        # Downstream only reads vlm_outputs.sequences / past_key_values /
+        # rope_deltas — capturing per-step logits ([B, max_gen, ~156k vocab])
+        # is ~20 MB per token of pure waste on the host-pinned output buffer.
+        generation_config.output_logits = False
         generation_config.return_dict_in_generate = True
         generation_config.top_k = top_k
         generation_config.pad_token_id = self.tokenizer.pad_token_id
